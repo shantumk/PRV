@@ -4,4 +4,4 @@ requests
 scikit-learn
 matplotlib
 seaborn
-pymupdf
+PyMuPDF
