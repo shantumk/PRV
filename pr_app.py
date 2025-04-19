@@ -45,6 +45,8 @@ uploaded_csv = st.sidebar.file_uploader("Step 1: Upload PR Data (CSV)", type=["c
 uploaded_policy = st.sidebar.file_uploader("Step 2: Upload Policy Document (PDF)", type=["pdf"])
 
 # Once both files are uploaded, begin processing\if uploaded_csv and uploaded_policy:
+# Once both files are uploaded, begin processing
+if uploaded_csv and uploaded_policy:
     st.success("All files uploaded successfully! Processing your data now...")
 
     # Load the CSV PR data
