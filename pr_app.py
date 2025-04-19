@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- Hugging Face API Setup ---
 HF_API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-large"
-HF_TOKEN = "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"  # Replace with your token
+HF_TOKEN = HF_TOKEN = st.secrets["api"]["hf_token"]  # Replace with your token
 headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
 # --- Extract plain text from uploaded PDF policy ---
