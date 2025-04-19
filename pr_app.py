@@ -164,16 +164,18 @@ if uploaded_csv and uploaded_policy:
         st.subheader("💰 Estimated Savings")
         savings_opportunities = []
         for item, row in consolidation_candidates.iterrows():
-            total_spend = row.sum()
-            best_vendor_cost = row[row > 0].min()
-            savings = total_spend - best_vendor_cost
-            savings_opportunities.append({
-                'Item': item,
-                'Total Spend': total_spend,
-                'Best Vendor Cost': best_vendor_cost,
-                'Estimated Savings': savings
-            })
-        savings_df = pd.DataFrame(savings_opportunities).sort_values(by='Estimated Savings', ascending=False)
+    total_spend = row.sum()
+    positive_values = row[row > 0]
+    if not positive_values.empty:
+        best_vendor_cost = positive_values.min()
+        savings = total_spend - best_vendor_cost
+        savings_opportunities.append({
+            'Item': item,
+            'Total Spend': total_spend,
+            'Best Vendor Cost': best_vendor_cost,
+            'Estimated Savings': savings
+        })
+savings_df = pd.DataFrame(savings_opportunities).sort_values(by='Estimated Savings', ascending=False).sort_values(by='Estimated Savings', ascending=False)
         st.dataframe(savings_df)
 
     # Spend Categorization
