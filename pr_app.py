@@ -122,7 +122,7 @@ if uploaded_csv and uploaded_policy:
     st.bar_chart(spend_by_agency.head(10))
 
     st.subheader("Spend Over Time")
-    time_series = df.set_index('ContractDate').resample('Q')['ContractValue'].sum()
+    time_series = df.set_index('ContractDate').resample('Q-DEC')['ContractValue'].sum()
     st.line_chart(time_series)
 
     st.subheader("High Value Outliers")
