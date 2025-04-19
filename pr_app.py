@@ -4,9 +4,11 @@ import requests
 import fitz
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 from io import StringIO
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
+from sklearn.ensemble import IsolationForest
 from scipy.stats import zscore
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -93,7 +95,6 @@ if uploaded_csv and uploaded_policy:
     df = df.dropna(subset=['ContractValue'])
     df['ContractDate'] = pd.to_datetime(df['ContractDate'], dayfirst=True, errors='coerce')
 
-    # Run LLM validation in background
     st.info("🔄 Running compliance validation in the background. Scroll down for spend insights.")
     validation_placeholder = st.empty()
 
@@ -110,49 +111,57 @@ if uploaded_csv and uploaded_policy:
                 output.append((idx, result))
         return output
 
-    # Spend Analysis Dashboard
+    # Spend Analysis
     st.header("💰 Spend Opportunity Dashboard")
-
-    st.subheader("Top Vendors by Spend")
     spend_by_vendor = df.groupby('VendorName')['ContractValue'].sum().sort_values(ascending=False)
+    st.subheader("Top Vendors by Spend")
     st.bar_chart(spend_by_vendor.head(10))
 
     st.subheader("Top Agencies by Spend")
     spend_by_agency = df.groupby('Agency')['ContractValue'].sum().sort_values(ascending=False)
     st.bar_chart(spend_by_agency.head(10))
 
-    st.subheader("Spend Over Time")
-    time_series = df.set_index('ContractDate').resample('Q-DEC')['ContractValue'].sum()
+    # Quarterly Spend
+    time_series = df.set_index('ContractDate').resample('QE-DEC')['ContractValue'].sum()
+    st.subheader("Spend Over Time (Quarterly)")
     st.line_chart(time_series)
 
+    # Z-score based Outliers
     st.subheader("High Value Outliers")
     df['z_score'] = zscore(df['ContractValue'].fillna(0))
     outliers = df[df['z_score'] > 3]
     st.dataframe(outliers[['PR_ID', 'VendorName', 'ContractValue', 'z_score']])
 
-    st.subheader("Vendor Spend Clusters")
-    vendor_df = spend_by_vendor.reset_index().rename(columns={'ContractValue': 'TotalSpend'})
-    scaler = StandardScaler()
-    vendor_df['ScaledSpend'] = scaler.fit_transform(vendor_df[['TotalSpend']])
-    kmeans = KMeans(n_clusters=3, random_state=42)
-    vendor_df['Cluster'] = kmeans.fit_predict(vendor_df[['ScaledSpend']])
+    # Anomaly Detection
+    st.subheader("🔍 Anomaly Detection (Isolation Forest)")
+    iso_forest = IsolationForest(contamination=0.05, random_state=42)
+    df['anomaly_score'] = iso_forest.fit_predict(df[['ContractValue']].fillna(0))
+    anomalies = df[df['anomaly_score'] == -1]
+    st.write("The following PRs are flagged as anomalous:")
+    st.dataframe(anomalies[['PR_ID', 'VendorName', 'ContractValue', 'ItemDescription']])
+
+    # Visualizing Anomalies
+    st.subheader("📈 Anomaly Score Visualization")
+    anomaly_viz = df[['ContractValue']].copy()
+    anomaly_viz['Anomaly Score'] = iso_forest.decision_function(df[['ContractValue']].fillna(0))
+    anomaly_viz['Is Anomaly'] = df['anomaly_score'] == -1
 
     fig, ax = plt.subplots()
-    sns.scatterplot(data=vendor_df, x='ScaledSpend', y='TotalSpend', hue='Cluster', palette='Set2', ax=ax)
-    ax.set_title("Vendor Spend Clusters")
+    sns.scatterplot(data=anomaly_viz, x=np.arange(len(anomaly_viz)), y='ContractValue', hue='Is Anomaly', palette='coolwarm', ax=ax)
+    ax.set_title("Contract Value vs Anomaly Flag")
     st.pyplot(fig)
-    st.dataframe(vendor_df)
 
+    # Supplier Consolidation
     st.subheader("💡 Supplier Consolidation Opportunities")
     grouped_items = df.groupby(['ItemDescription', 'VendorName'])['ContractValue'].sum().reset_index()
     consolidation_pivot = grouped_items.pivot_table(index='ItemDescription', columns='VendorName', values='ContractValue', fill_value=0)
     consolidation_candidates = consolidation_pivot[consolidation_pivot.astype(bool).sum(axis=1) > 1]
 
     if not consolidation_candidates.empty:
-        st.write("These items were procured from multiple vendors. Consider consolidating to drive volume-based savings:")
+        st.write("Items procured from multiple vendors:")
         st.dataframe(consolidation_candidates)
 
-        st.subheader("💰 Estimated Savings (if lowest vendor retained)")
+        st.subheader("💰 Estimated Savings")
         savings_opportunities = []
         for item, row in consolidation_candidates.iterrows():
             total_spend = row.sum()
@@ -166,9 +175,8 @@ if uploaded_csv and uploaded_policy:
             })
         savings_df = pd.DataFrame(savings_opportunities).sort_values(by='Estimated Savings', ascending=False)
         st.dataframe(savings_df)
-    else:
-        st.write("✅ No consolidation opportunities detected based on current data.")
 
+    # Spend Categorization
     st.subheader("🧠 Spend Category Insights")
     def categorize_item(description):
         d = description.lower()
@@ -188,10 +196,9 @@ if uploaded_csv and uploaded_policy:
     df['SpendCategory'] = df['ItemDescription'].apply(categorize_item)
     category_summary = df.groupby('SpendCategory')['ContractValue'].sum().sort_values(ascending=False)
     st.bar_chart(category_summary)
-    st.write("Use this breakdown to target high-volume categories for strategic sourcing opportunities.")
 
-    # Finish LLM validation
-    with st.spinner("Merging validation results..."):
+    # Finish validation
+    with st.spinner("Finalizing LLM Validation..."):
         results = run_llm_validation(df, policy_text)
         validation_map = {idx: result for idx, result in results}
         df['LLM_Check'] = df.index.map(lambda i: validation_map.get(i, "Pending"))
@@ -199,7 +206,10 @@ if uploaded_csv and uploaded_policy:
     st.success("✅ PR validation complete!")
     validation_placeholder.dataframe(df[['PR_ID', 'VendorName', 'ContractValue', 'ItemDescription', 'LLM_Check']])
 
-    # Download
+    # Download section
+    st.subheader("📥 Download Reports")
+    st.download_button("Download Anomalies CSV", data=anomalies.to_csv(index=False), file_name="anomalies.csv", mime="text/csv")
+    st.download_button("Download Outliers CSV", data=outliers.to_csv(index=False), file_name="outliers.csv", mime="text/csv")
     st.sidebar.download_button(
         label="📥 Download Validated PR Data",
         data=df.to_csv(index=False),
