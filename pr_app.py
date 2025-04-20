@@ -207,9 +207,12 @@ with tabs[3]:
 # --- Tab 5: Executive Summary ---
 with tabs[4]:
     st.header("📋 Project Summary")
-    st.markdown(f\"\"\"
+    # --- Tab 5: Executive Summary ---
+with tabs[4]:
+    st.header("📋 Project Summary")
+    st.markdown(f"""
     **Records after cleaning:** {len(df)}  
     **High-risk tenders:** {y.sum()} ({y.mean()*100:.1f}%)  
     **Random Forest AUC:** {roc_auc_score(y_test, rf.predict_proba(X_test)[:,1]):.3f}  
-    \"\"\")
+    """)
     st.balloons()
