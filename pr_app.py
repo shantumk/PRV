@@ -186,7 +186,7 @@ with tabs[2]:
 with tabs[3]:
     st.header("High-Risk Suppliers")
     hr = df[df["high_risk"]==1]
-    spend = hr.groupby("Vendor")["Value"].sum().nlargest(10
+    spend = hr.groupby("Vendor")["Value"].sum().nlargest(10)
     fig, ax = plt.subplots(); spend.plot.pie(ax=ax, autopct='%1.1f%%'); st.pyplot(fig)
 
 # Summary
