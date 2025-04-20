@@ -1,7 +1,8 @@
 streamlit
 pandas
-requests
-scikit-learn
+numpy
 matplotlib
 seaborn
-PyMuPDF
+scikit‑learn
+shap
+huggingface_hub
