@@ -47,23 +47,40 @@ else:
 # --- Cached Functions ---
 @st.cache_data
 def load_data(file):
-    return pd.read_csv(file)
+    try:
+        return pd.read_csv(file)
+    except Exception as e:
+        st.error(f"❌ Failed to read CSV: {e}")
+        return pd.DataFrame()
 
 @st.cache_data
 def clean_and_engineer(df, mapping):
     df = df.rename(columns={mapping[k]: k for k in mapping if mapping[k]})
+
+    required_fields = ['TenderID', 'Value', 'BidCount', 'ProcedureType', 'CRI', 'Vendor']
+    missing_cols = [col for col in required_fields if col not in df.columns]
+    if missing_cols:
+        st.error(f"❌ Required columns missing from uploaded file: {missing_cols}")
+        return pd.DataFrame(), pd.DataFrame(), pd.Series(), 0, 0, []
+
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
     df['BidCount'] = pd.to_numeric(df['BidCount'], errors='coerce')
     df['CRI'] = pd.to_numeric(df['CRI'], errors='coerce')
+
     before = len(df)
-    df = df.dropna(subset=['TenderID', 'Value', 'BidCount', 'ProcedureType', 'CRI', 'Vendor']).reset_index(drop=True)
+    df = df.dropna(subset=required_fields).reset_index(drop=True)
     after = len(df)
+
+    if after == 0:
+        st.error("❌ All rows were dropped during cleaning. Ensure your data has values in the required fields.")
+        return pd.DataFrame(), pd.DataFrame(), pd.Series(), before, after, []
+
     df['high_risk'] = (df['CRI'] >= 0.5).astype(int)
     X = pd.DataFrame({
         'Value_log': np.log1p(df['Value']),
         'BidCount_log': np.log1p(df['BidCount'])
     })
-    proc = pd.get_dummies(df['ProcedureType'], prefix='ptype', dummy_na=True)
+    proc = pd.get_dummies(df['ProcedureType'].astype(str), prefix='ptype', dummy_na=True)
     X = pd.concat([X, proc], axis=1)
     corr_cols = [c for c in df.columns if c.startswith('corr_')]
     for c in corr_cols:
@@ -113,10 +130,8 @@ st.sidebar.subheader("🔧 Confirm Column Mapping")
 for key, default in default_map.items():
     mapping[key] = st.sidebar.selectbox(key, [''] + cols, index=(cols.index(default)+1 if default in cols else 0))
 
-try:
-    df, X, y, before, after, corr_cols = clean_and_engineer(raw, mapping)
-except KeyError:
-    st.error("🚫 Mapping error. Please review selected columns.")
+df, X, y, before, after, corr_cols = clean_and_engineer(raw, mapping)
+if df.empty or X.empty or y.empty:
     st.stop()
 
 # --- Tabs ---
@@ -178,7 +193,7 @@ with tabs[2]:
         X_new['Value_log'] = np.log1p(pd.to_numeric(new_df['Value'], errors='coerce'))
         X_new['BidCount_log'] = np.log1p(pd.to_numeric(new_df['BidCount'], errors='coerce'))
 
-        proc_new = pd.get_dummies(new_df['ProcedureType'], prefix="ptype", dummy_na=True)
+        proc_new = pd.get_dummies(new_df['ProcedureType'].astype(str), prefix="ptype", dummy_na=True)
         for col in proc_new.columns:
             if col in X_new.columns:
                 X_new[col] = proc_new[col]
