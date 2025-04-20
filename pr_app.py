@@ -6,22 +6,23 @@ import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, roc_curve
+from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, roc_curve, accuracy_score
 
 # --- Page Config ---
 st.set_page_config(page_title="Procurement Corruption-Risk Prediction", layout="wide")
 st.title("🔍 Procurement Corruption-Risk Prediction Dashboard")
 
 # --- Sidebar: Data Upload ---
-st.sidebar.header("📂 Upload Data")
+st.sidebar.header("📂 Upload Your Data")
 uploaded_file = st.sidebar.file_uploader("Upload trimmed DIB CSV (<200MB)", type=["csv"])
 
 if uploaded_file:
-    # Load data
+    # Load data and basic cleanup
     df = pd.read_csv(uploaded_file)
+    st.sidebar.success("Data loaded successfully!")
     cols = df.columns.tolist()
 
-    # Auto-mapping helper
+    # --- Auto-mapping helper ---
     def auto_map(options):
         for col in cols:
             for opt in options:
@@ -29,7 +30,7 @@ if uploaded_file:
                     return col
         return None
 
-    # Default column mapping
+    # --- Default mappings ---
     mapping = {
         "TenderID": auto_map(["tender_id", "tenderref", "id"]),
         "Value": auto_map(["tender_value", "value", "amount"]),
@@ -45,161 +46,158 @@ if uploaded_file:
             index=(cols.index(default) + 1 if default in cols else 0)
         )
 
-    # Rename columns
+    # Rename columns for consistency
     rename_dict = {mapping[k]: k for k in mapping if mapping[k]}
     df = df.rename(columns=rename_dict)
 
-    # Convert types and filter
+    # Convert types
     df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
     df["BidCount"] = pd.to_numeric(df["BidCount"], errors="coerce")
     df["CRI"] = pd.to_numeric(df["CRI"], errors="coerce")
-    df = df.dropna(subset=["TenderID", "Value", "BidCount", "ProcedureType", "CRI"])
+    df = df.dropna(subset=["TenderID", "Value", "BidCount", "ProcedureType", "CRI"]).reset_index(drop=True)
 
-    # Derive label
+    # Derive high-risk label
     df["high_risk"] = (df["CRI"] >= 0.5).astype(int)
 
     # Identify corruption flag columns
-    corr_cols = [col for col in df.columns if col.startswith("corr_")]
+    corr_cols = [c for c in df.columns if c.startswith("corr_")]
 
-    # Create tabs
-    tab1, tab2, tab3 = st.tabs(["EDA", "Modeling", "Prediction"])
+    # Define feature matrix and label once
+    X_base = pd.DataFrame({
+        "Value_log": np.log1p(df["Value"]),
+        "BidCount_log": np.log1p(df["BidCount"])  
+    })
+    proc_dummies = pd.get_dummies(df["ProcedureType"], prefix="ptype", dummy_na=True)
+    X_base = pd.concat([X_base, proc_dummies], axis=1)
+    for c in corr_cols:
+        X_base[c] = df[c].fillna(0)
+    y_base = df["high_risk"]
 
-    with tab1:
+    # Tabs for organization
+    tab_eda, tab_model, tab_pred, tab_summary = st.tabs(["EDA", "Modeling", "Prediction", "Summary"])
+
+    with tab_eda:
         st.header("📊 Exploratory Data Analysis")
-
-        st.subheader("Data Overview")
-        st.write(f"Rows: {df.shape[0]}, Columns: {df.shape[1]}")
-        st.dataframe(df.head())
-
-        st.subheader("Missing Values (%)")
-        missing = df.isnull().mean() * 100
-        fig, ax = plt.subplots(figsize=(10, 4))
-        missing.plot(kind="bar", ax=ax)
-        ax.set_ylabel("Percent Missing")
+        # Data availability
+        st.subheader("Data Availability (%)")
+        avail = df.notnull().mean() * 100
+        fig_avail, ax = plt.subplots(figsize=(10, 4))
+        avail.plot(kind="bar", ax=ax)
+        ax.set_ylabel("% Available")
         plt.xticks(rotation=90)
-        st.pyplot(fig)
+        st.pyplot(fig_avail)
 
+        # Distribution of key fields
         st.subheader("Tender Value Distribution (log scale)")
-        fig, ax = plt.subplots()
-        sns.histplot(np.log1p(df["Value"]), bins=50, ax=ax)
-        ax.set_xlabel("log1p(Value)")
-        st.pyplot(fig)
+        fig1, ax1 = plt.subplots()
+        sns.histplot(np.log1p(df["Value"]), bins=50, ax=ax1)
+        ax1.set_xlabel("log1p(Value)")
+        st.pyplot(fig1)
 
         st.subheader("CRI Score Distribution")
-        fig, ax = plt.subplots()
-        sns.histplot(df["CRI"], bins=50, ax=ax)
-        st.pyplot(fig)
+        fig2, ax2 = plt.subplots()
+        sns.histplot(df["CRI"], bins=50, ax=ax2)
+        st.pyplot(fig2)
 
-        st.subheader("Correlation Matrix")
+        st.subheader("Correlation Heatmap")
         num_cols = ["Value", "BidCount", "CRI"] + corr_cols
-        corr = df[num_cols].corr()
-        fig, ax = plt.subplots(figsize=(12, 10))
-        sns.heatmap(corr, cmap="coolwarm", center=0, ax=ax)
-        st.pyplot(fig)
+        corr_mat = df[num_cols].corr()
+        fig3, ax3 = plt.subplots(figsize=(12, 10))
+        sns.heatmap(corr_mat, cmap="coolwarm", center=0, ax=ax3)
+        st.pyplot(fig3)
 
-        st.subheader("CRI by Procedure Type")
-        fig, ax = plt.subplots(figsize=(8, 4))
-        sns.boxplot(x="ProcedureType", y="CRI", data=df, ax=ax)
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
-
-    with tab2:
+    with tab_model:
         st.header("🤖 Model Training & Evaluation")
-
-        # Feature engineering
-        X = pd.DataFrame()
-        X["Value_log"] = np.log1p(df["Value"])
-        X["BidCount_log"] = np.log1p(df["BidCount"])
-        proc_dummies = pd.get_dummies(df["ProcedureType"], prefix="ptype", dummy_na=True)
-        X = pd.concat([X, proc_dummies], axis=1)
-        for col in corr_cols:
-            X[col] = df[col].fillna(0)
-        y = df["high_risk"]
-
-        # Split data
+        # Train/test size selection
+        test_size = st.slider("Test set fraction", 0.1, 0.5, 0.2, step=0.05)
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, stratify=y, test_size=0.2, random_state=42
-        )
+            X_base, y_base, stratify=y_base, test_size=test_size, random_state=42)
+        st.write(f"Training on {len(X_train)} samples, testing on {len(X_test)} samples.")
 
-        # Logistic Regression
+        # Fit models
         lr = LogisticRegression(max_iter=1000)
-        lr.fit(X_train, y_train)
-        y_pred_lr = lr.predict(X_test)
-        y_prob_lr = lr.predict_proba(X_test)[:, 1]
-        auc_lr = roc_auc_score(y_test, y_prob_lr)
-
-        # Random Forest
         rf = RandomForestClassifier(n_estimators=100, random_state=42)
-        rf.fit(X_train, y_train)
-        y_pred_rf = rf.predict(X_test)
-        y_prob_rf = rf.predict_proba(X_test)[:, 1]
-        auc_rf = roc_auc_score(y_test, y_prob_rf)
+        lr.fit(X_train, y_train); rf.fit(X_train, y_train)
 
-        st.subheader("Model Performance")
-        st.write(f"Logistic Regression ROC-AUC: {auc_lr:.3f}")
-        st.write(f"Random Forest ROC-AUC: {auc_rf:.3f}")
+        # Predict & evaluate
+        y_pred_lr = lr.predict(X_test); y_prob_lr = lr.predict_proba(X_test)[:,1]
+        y_pred_rf = rf.predict(X_test); y_prob_rf = rf.predict_proba(X_test)[:,1]
+        auc_lr = roc_auc_score(y_test, y_prob_lr); auc_rf = roc_auc_score(y_test, y_prob_rf)
+        acc_lr = accuracy_score(y_test, y_pred_lr); acc_rf = accuracy_score(y_test, y_pred_rf)
 
-        st.subheader("Classification Report - LR")
-        report_lr = classification_report(y_test, y_pred_lr, output_dict=True)
-        st.dataframe(pd.DataFrame(report_lr).transpose())
+        st.subheader("Performance Metrics")
+        st.markdown(f"- Logistic Regression: AUC = {auc_lr:.3f}, Accuracy = {acc_lr:.3f}")
+        st.markdown(f"- Random Forest:       AUC = {auc_rf:.3f}, Accuracy = {acc_rf:.3f}")
 
-        st.subheader("Classification Report - RF")
-        report_rf = classification_report(y_test, y_pred_rf, output_dict=True)
-        st.dataframe(pd.DataFrame(report_rf).transpose())
+        # Display confusion matrices
+        fig_cm1, ax_cm1 = plt.subplots(); sns.heatmap(confusion_matrix(y_test, y_pred_lr), annot=True, fmt="d", ax=ax_cm1)
+        ax_cm1.set_title("Confusion Matrix - LR"); st.pyplot(fig_cm1)
+        fig_cm2, ax_cm2 = plt.subplots(); sns.heatmap(confusion_matrix(y_test, y_pred_rf), annot=True, fmt="d", ax=ax_cm2)
+        ax_cm2.set_title("Confusion Matrix - RF"); st.pyplot(fig_cm2)
 
-        st.subheader("Confusion Matrix - LR")
-        cm_lr = confusion_matrix(y_test, y_pred_lr)
-        fig, ax = plt.subplots()
-        sns.heatmap(cm_lr, annot=True, fmt="d", cmap="Blues", ax=ax)
-        ax.set_xlabel("Predicted")
-        ax.set_ylabel("Actual")
-        st.pyplot(fig)
-
-        st.subheader("Confusion Matrix - RF")
-        cm_rf = confusion_matrix(y_test, y_pred_rf)
-        fig, ax = plt.subplots()
-        sns.heatmap(cm_rf, annot=True, fmt="d", cmap="Greens", ax=ax)
-        ax.set_xlabel("Predicted")
-        ax.set_ylabel("Actual")
-        st.pyplot(fig)
-
-        st.subheader("ROC Curves")
+        # ROC curves
         fpr_lr, tpr_lr, _ = roc_curve(y_test, y_prob_lr)
         fpr_rf, tpr_rf, _ = roc_curve(y_test, y_prob_rf)
-        fig, ax = plt.subplots()
-        ax.plot(fpr_lr, tpr_lr, label=f"LR (AUC={auc_lr:.3f})")
-        ax.plot(fpr_rf, tpr_rf, label=f"RF (AUC={auc_rf:.3f})")
-        ax.plot([0,1], [0,1], "--", color="gray")
-        ax.set_xlabel("False Positive Rate")
-        ax.set_ylabel("True Positive Rate")
-        ax.legend()
-        st.pyplot(fig)
+        fig_roc, ax_roc = plt.subplots()
+        ax_roc.plot(fpr_lr, tpr_lr, label=f"LR (AUC={auc_lr:.3f})")
+        ax_roc.plot(fpr_rf, tpr_rf, label=f"RF (AUC={auc_rf:.3f})")
+        ax_roc.plot([0,1],[0,1],'--',color='gray'); ax_roc.set_xlabel("FPR"); ax_roc.set_ylabel("TPR"); ax_roc.legend()
+        st.pyplot(fig_roc)
 
-    with tab3:
-        st.header("📝 Predict New Tenders")
-        new_file = st.file_uploader("Upload CSV of new tenders", type=["csv"], key="pred")
-        model_choice = st.selectbox("Choose Model", ["Logistic Regression", "Random Forest"])
-        if new_file:
-            new_df = pd.read_csv(new_file)
-            new_df = new_df.rename(columns=rename_dict)
-            # Validate
-            required_cols = ["Value", "BidCount", "ProcedureType"]
-            if not all(col in new_df.columns for col in required_cols):
-                st.error("Uploaded file missing required columns. Please map accordingly.")
-            else:
-                X_new = pd.DataFrame()
-                X_new["Value_log"] = np.log1p(pd.to_numeric(new_df["Value"], errors="coerce"))
-                X_new["BidCount_log"] = np.log1p(pd.to_numeric(new_df["BidCount"], errors="coerce"))
+    with tab_pred:
+        st.header("📝 Prediction on New Data or Original Split")
+        st.markdown("You can either upload a new tender file or use a portion of the original data as a test set.")
+        choice = st.radio("Prediction Source", ["Upload New CSV", "Use Held-out Test Set"], index=1)
+        if choice == "Upload New CSV":
+            new_file = st.file_uploader("Upload new tenders CSV", type=["csv"], key="new")
+            if new_file:
+                new_df = pd.read_csv(new_file)
+                new_df = new_df.rename(columns=rename_dict)
+                # Build features as before
+                X_new = pd.DataFrame({
+                    "Value_log": np.log1p(pd.to_numeric(new_df["Value"], errors="coerce")),
+                    "BidCount_log": np.log1p(pd.to_numeric(new_df["BidCount"], errors="coerce"))
+                })
                 proc_new = pd.get_dummies(new_df["ProcedureType"], prefix="ptype", dummy_na=True)
                 X_new = pd.concat([X_new, proc_dummies.reindex(proc_new.index, fill_value=0)], axis=1)
-                for col in corr_cols:
-                    X_new[col] = new_df.get(col, 0)
-                if model_choice == "Logistic Regression":
-                    new_df["risk_prob"] = lr.predict_proba(X_new)[:, 1]
-                else:
-                    new_df["risk_prob"] = rf.predict_proba(X_new)[:, 1]
+                for c in corr_cols: X_new[c] = new_df.get(c, 0)
+                # Choose model
+                model = lr if st.selectbox("Select model", ["Logistic Regression","Random Forest"]) == "Logistic Regression" else rf
+                new_df["risk_prob"] = model.predict_proba(X_new)[:,1]
                 new_df["risk_label"] = (new_df["risk_prob"] >= 0.5).astype(int)
-                st.dataframe(new_df[["TenderID", "risk_prob", "risk_label"]])
+                st.dataframe(new_df[["TenderID","risk_prob","risk_label"]])
                 st.download_button("Download Predictions", new_df.to_csv(index=False), file_name="predictions.csv")
+        else:
+            # Use test split
+            st.markdown(f"Using the held-out {len(X_test)} samples from original data.")
+            model = lr if st.selectbox("Select model for evaluation", ["LR","RF"]) == "LR" else rf
+            X_eval, y_eval = X_test, y_test
+            y_eval_prob = model.predict_proba(X_eval)[:,1]
+            y_eval_pred = model.predict(X_eval)
+            st.markdown(f"**Evaluation Accuracy:** {accuracy_score(y_eval, y_eval_pred):.3f}")
+            st.markdown(f"**Evaluation AUC:** {roc_auc_score(y_eval, y_eval_prob):.3f}")
+
+    with tab_summary:
+        st.header("📋 Analysis Summary Report")
+        st.subheader("Dataset Summary")
+        st.markdown(f"- Total records: **{df.shape[0]}**")
+        st.markdown(f"- Total features: **{df.shape[1]}**")
+        st.markdown(f"- High-risk tenders: **{int(df['high_risk'].sum())}** ({(df['high_risk'].mean()*100):.1f}%)")
+
+        st.subheader("Model Summary")
+        st.markdown(f"- Logistic Regression: AUC {auc_lr:.3f}, Accuracy {acc_lr:.3f}")
+        st.markdown(f"- Random Forest: AUC {auc_rf:.3f}, Accuracy {acc_rf:.3f}")
+
+        st.subheader("Next Steps & Insights")
+        st.markdown(
+            "- Investigate items with highest predicted risk for manual review."
+        )
+        st.markdown(
+            "- Tune models with additional features (timing, vendor history)."
+        )
+        st.markdown(
+            "- Deploy this dashboard to support procurement decision-making."
+        )
+
 else:
-    st.info("Upload a procurement CSV file to begin.")
+    st.info("Upload a procurement CSV file to begin your corruption-risk analysis.")
