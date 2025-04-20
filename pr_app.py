@@ -82,13 +82,28 @@ if uploaded_file:
     # --- EDA Tab ---
     with tab_eda:
         st.header("📊 Exploratory Data Analysis")
-        # Data availability
+                # Data availability with toggle options
         st.subheader("Data Availability")
         avail = df.notnull().mean() * 100
-        fig_avail, ax_avail = plt.subplots(figsize=(10, 4))
-        avail.plot(kind="barh", ax=ax_avail, color='skyblue')
-        ax_avail.set_xlabel("% Non-Null")
-        st.pyplot(fig_avail)
+        # Toggle between Top/Bottom view and Full table view
+        view_mode = st.radio("Choose availability display:", ["Top/Bottom 10", "Full Data Table"])  
+        if view_mode == "Top/Bottom 10":
+            top_bottom = st.selectbox(
+                "Show:", ["Most Complete", "Most Missing"], index=0
+            )
+            if top_bottom == "Most Complete":
+                subset = avail.sort_values(ascending=False).head(10)
+            else:
+                subset = avail.sort_values(ascending=True).head(10)
+            fig_sub, ax_sub = plt.subplots(figsize=(6, max(2, len(subset)*0.4)))
+            subset.plot(kind="barh", ax=ax_sub, color='skyblue')
+            ax_sub.set_xlabel("% Non-Null")
+            st.pyplot(fig_sub)
+        else:
+            # Full data availability table
+            avail_df = avail.sort_values(ascending=False).to_frame("Availability (%)")
+            st.dataframe(avail_df)
+
 
         # Scatter Value vs BidCount colored by risk
         st.subheader("Value vs. BidCount (colored by risk)")
