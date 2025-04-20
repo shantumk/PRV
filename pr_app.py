@@ -235,7 +235,7 @@ with t5:
     st.balloons()
 
 # Tab 6: Predict CRI
-ith t6:
+with t6:
     st.header("🧮 Predict CRI Score")
     num_feats = [
         c for c in df.columns
