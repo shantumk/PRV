@@ -165,24 +165,23 @@ with t1:
 
 # Tab 2: Modeling
 # Tab 2: Modelingwith t2:
+with t2:
     st.header("🤖 Model Training & Evaluation")
 
-    # Hyperparameter controls
-    n_trees   = st.slider("RF Trees",  10, 300, 100)
-    test_size = st.slider("Test Size", 0.1, 0.5, 0.2)
+    # Hyperparameters
+    n_trees   = st.slider("Random Forest Trees",  10, 300, 100)
+    test_size = st.slider("Test Size",          0.1, 0.5, 0.2)
 
-    # Split into train/test
+    # Split and train
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, stratify=y, random_state=42
     )
-
-    # Fit models
     lr = LogisticRegression(max_iter=500)
     rf = RandomForestClassifier(n_estimators=n_trees, random_state=42)
     lr.fit(X_train, y_train)
     rf.fit(X_train, y_train)
 
-    # Performance metrics
+    # Performance table
     met = pd.DataFrame({
         'Model':    ['Logistic Regression', 'Random Forest'],
         'Accuracy': [
@@ -194,31 +193,37 @@ with t1:
             roc_auc_score(y_test, rf.predict_proba(X_test)[:,1])
         ]
     }).set_index('Model')
-
     st.subheader("📊 Metrics")
     st.dataframe(met.style.format("{:.3f}"))
 
-    # Confusion matrix for RF
+    # Confusion matrix
     st.subheader("🔄 Confusion Matrix (Random Forest)")
     cm = confusion_matrix(y_test, rf.predict(X_test))
     fig_cm, ax_cm = plt.subplots()
     ConfusionMatrixDisplay(cm).plot(ax=ax_cm)
     st.pyplot(fig_cm)
 
-    # SHAP explainability on a small sample
+    # SHAP explainability
     st.subheader("🔍 SHAP Feature Importance (sampled)")
     try:
         import shap
         # sample up to 100 rows for speed
-        sample_n = min(100, X_train.shape[0])
-        X_sample = X_train.sample(n=sample_n, random_state=42)
+        sample_n  = min(100, X_train.shape[0])
+        X_sample  = X_train.sample(n=sample_n, random_state=42)
+        explainer = shap.TreeExplainer(rf)
+        shap_vals = explainer.shap_values(X_sample)[1]  # class‑1
 
-        explainer   = shap.TreeExplainer(rf)
-        shap_values = explainer.shap_values(X_sample)
+        # compute mean(|shap|)
+        mean_abs = np.abs(shap_vals).mean(axis=0)
+        shap_imp = pd.DataFrame({
+            'feature': X_sample.columns,
+            'importance': mean_abs
+        }).sort_values('importance', ascending=True)
 
-        fig_shap = plt.figure()
-        # bar plot avoids the shape‐mismatch assertion
-        shap.summary_plot(shap_values[1], X_sample, plot_type="bar", show=False)
+        fig_shap, ax_shap = plt.subplots(figsize=(6,8))
+        ax_shap.barh(shap_imp['feature'], shap_imp['importance'])
+        ax_shap.set_xlabel("Mean |SHAP value|")
+        ax_shap.set_title("Feature importance (positive class)")
         st.pyplot(fig_shap)
 
     except ImportError:
