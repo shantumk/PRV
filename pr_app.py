@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression, RidgeCV
 from sklearn.ensemble import RandomForestClassifier
@@ -15,18 +17,22 @@ try:
 except ImportError:
     hf_hub_installed = False
 
-# --- Page Config ---
-st.set_page_config(page_title="🛡️ Corruption Risk Analyzer for Procurement", layout="wide")
+# --- Page Config & Styling ---
+st.set_page_config(page_title="🛡️ Corruption Risk Analyzer", layout="wide")
+st.markdown(
+    """
+    <style>
+    body { background-color: #F5F7FA; }
+    .stApp { color: #0E1117; }
+    .metric-value { font-size: 1.5rem; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True
+)
 
-# --- Intro Section ---
-st.title("🛡️ Corruption Risk Analyzer for Procurement")
+# --- Header ---
+st.markdown("# 🛡️ Corruption Risk Analyzer for Procurement")
 st.markdown("""
-This app helps procurement officers, auditors, and analysts **detect high-risk tenders** in public or private procurement data using explainable machine learning.
-
-**Upload your data → Automatically map → Clean and visualize → Predict risk → Prioritize supplier audits.**
-
-### 📌 Objective:
-To identify corruption-prone tenders using a data-driven approach, highlight high-risk vendors, and assist in prioritizing audit efforts using ML-based risk scores and domain context.
+Optimize audit prioritization by spotting high-risk tenders in your procurement data using explainable ML.
 """)
 
 # --- LLM Setup ---
@@ -38,7 +44,7 @@ if hf_hub_installed:
             hf_infer = InferenceClient(model="google/flan-t5-small", token=hf_token)
             hf_ready = True
         else:
-            st.warning("⚠️ LLM token missing; descriptive summaries disabled.")
+            st.warning("⚠️ LLM token missing; summaries disabled.")
     except Exception:
         st.warning("⚠️ Error initializing LLM; summaries disabled.")
 else:
@@ -47,40 +53,23 @@ else:
 # --- Cached Functions ---
 @st.cache_data
 def load_data(file):
-    try:
-        return pd.read_csv(file)
-    except Exception as e:
-        st.error(f"❌ Failed to read CSV: {e}")
-        return pd.DataFrame()
+    return pd.read_csv(file)
 
 @st.cache_data
 def clean_and_engineer(df, mapping, threshold=0.45):
     df = df.rename(columns={mapping[k]: k for k in mapping if mapping[k]})
-
-    # Drop columns below threshold
-    availability = df.notnull().mean()
-    df = df[availability[availability >= threshold].index.tolist()]
-
-    required_fields = ['TenderID', 'Value', 'BidCount', 'ProcedureType', 'CRI', 'Vendor']
-    missing_cols = [col for col in required_fields if col not in df.columns]
-    if missing_cols:
-        st.error(f"❌ Required columns missing: {missing_cols}")
-        return pd.DataFrame(), pd.DataFrame(), pd.Series(), 0, 0, []
-
+    avail = df.notnull().mean()
+    df = df[avail[avail >= threshold].index]
+    req = ['TenderID','Value','BidCount','ProcedureType','CRI','Vendor']
+    if any(c not in df.columns for c in req):
+        return None
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
     df['BidCount'] = pd.to_numeric(df['BidCount'], errors='coerce')
     df['CRI'] = pd.to_numeric(df['CRI'], errors='coerce')
-
     before = len(df)
-    df = df.dropna(subset=required_fields).reset_index(drop=True)
+    df.dropna(subset=req, inplace=True)
     after = len(df)
-
-    if after == 0:
-        st.error("❌ All rows dropped. Check required fields.")
-        return pd.DataFrame(), pd.DataFrame(), pd.Series(), before, after, []
-
     df['high_risk'] = (df['CRI'] >= 0.5).astype(int)
-    # Feature matrix
     X = pd.DataFrame({
         'Value_log': np.log1p(df['Value']),
         'BidCount_log': np.log1p(df['BidCount'])
@@ -103,28 +92,22 @@ def describe_field(text):
         return f'LLM error: {e}'
 
 # --- Sidebar: Upload & Map ---
-st.sidebar.header("📂 Upload Your Procurement CSV")
-file = st.sidebar.file_uploader("Upload CSV", type="csv")
+st.sidebar.header("📂 Upload & Map")
+file = st.sidebar.file_uploader("Upload Procurement CSV", type='csv')
 if not file:
-    st.info("Please upload your procurement CSV file.")
+    st.info("Upload a CSV to get started.")
     st.stop()
-
 raw = load_data(file)
 cols = raw.columns.tolist()
-st.sidebar.success(f"Loaded {len(raw):,} rows")
+st.sidebar.success(f"{len(raw):,} rows loaded")
+thresh = st.sidebar.slider("Min column availability (%)", 10, 100, 45) / 100
 
-# Threshold Slider
-threshold = st.sidebar.slider("Minimum Column Availability (%)", 10, 100, 45) / 100
-
-# --- Auto-mapping ---
 def am(opts):
-    for c in cols:
-        for o in opts:
-            if o.lower() in c.lower():
-                return c
-    return None
-
-default_map = {
+    for col in cols:
+        if any(o.lower() in col.lower() for o in opts):
+            return col
+    return ''
+def_map = {
     'TenderID': am(['tender_id','id']),
     'Value': am(['value','amount']),
     'BidCount': am(['bidcount','bids']),
@@ -132,123 +115,123 @@ default_map = {
     'CRI': am(['cri','risk']),
     'Vendor': am(['vendor','supplier']),
 }
-
-mapping = {}
-st.sidebar.subheader("🔧 Confirm Column Mapping")
-for key, default in default_map.items():
-    mapping[key] = st.sidebar.selectbox(key, ['']+cols, index=(cols.index(default)+1 if default in cols else 0))
-
-# Clean and prepare data
-df, X, y, before, after, corr_cols = clean_and_engineer(raw, mapping, threshold)
-if df.empty or X.empty or y.empty:
+st.sidebar.subheader("🔧 Confirm Mapping")
+mapping = {k: st.sidebar.selectbox(k, ['']+cols, index=(cols.index(v)+1 if v in cols else 0))
+           for k, v in def_map.items()}
+res = clean_and_engineer(raw, mapping, thresh)
+if not res:
+    st.error("Mapping or threshold issue — adjust inputs.")
     st.stop()
+df, X, y, before, after, corr_cols = res
+risk_pct = y.mean() * 100
+
+# --- Top Metrics ---
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Raw Rows", f"{len(raw):,}")
+col2.metric("Kept Rows", f"{len(df):,}", delta=f"-{before - after:,}")
+col3.metric("High-Risk %", f"{risk_pct:.1f}%")
+auc_full = roc_auc_score(y, RandomForestClassifier(n_estimators=100).fit(X, y).predict_proba(X)[:,1])
+col4.metric("Model AUC", f"{auc_full:.3f}")
 
 # --- Tabs ---
-tabs = st.tabs(["📊 EDA","🤖 Modeling","📝 Prediction","🚩 Suppliers","📋 Summary","🧮 Predict CRI"])
+t1, t2, t3, t4, t5, t6 = st.tabs(
+    ["📊 EDA", "🤖 Modeling", "📝 Prediction", "🚩 Suppliers", "📋 Summary", "🧮 Predict CRI"]
+)
 
 # Tab 1: EDA
-with tabs[0]:
+with t1:
     st.header("📊 Exploratory Data Analysis")
-    st.markdown("**Purpose:** Understand data quality and risk signals.")
-    if hf_ready and st.button("💡 Generate Dataset Summary"):
-        insight = describe_field(f"Summarize a procurement dataset with {len(df)} rows and {df.shape[1]} fields.")
+    if hf_ready and st.button("💡 Generate Insight"):
+        insight = describe_field(
+            f"Procurement dataset with {len(df)} rows and {df.shape[1]} columns."
+        )
         st.info(insight)
-    # Availability
-    st.subheader("Field Availability (% non-null)")
-    st.bar_chart(df.notnull().mean()*100)
-    # Spend vs Bid Count
+    st.subheader("Field Availability")
+    fig1 = px.bar(x=df.notnull().mean() * 100, labels={'x': '% Non-null', 'index': 'Field'})
+    st.plotly_chart(fig1, use_container_width=True)
     st.subheader("Spend vs Bid Count")
-    fig, ax = plt.subplots()
-    sns.scatterplot(data=df, x='BidCount', y='Value', hue='high_risk', ax=ax)
-    ax.set_xscale('log'); ax.set_yscale('log')
-    st.pyplot(fig)
-    # CRI distribution
+    fig2 = px.scatter(df, x='BidCount', y='Value', color=df['high_risk'].map({0:'Low',1:'High'}), log_x=True, log_y=True)
+    st.plotly_chart(fig2, use_container_width=True)
     st.subheader("CRI Distribution by Risk")
-    fig, ax = plt.subplots()
-    sns.boxplot(data=df, x='high_risk', y='CRI', ax=ax)
-    st.pyplot(fig)
+    fig3 = px.box(df, x='high_risk', y='CRI', labels={'high_risk':'Risk Label', 'CRI':'CRI Score'})
+    st.plotly_chart(fig3, use_container_width=True)
 
 # Tab 2: Modeling
-with tabs[1]:
+with t2:
     st.header("🤖 Model Training & Evaluation")
-    n_trees = st.slider("Random Forest Trees", 10, 300, 100)
-    test_size = st.slider("Test size", 0.1, 0.5, 0.2)
-    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=test_size, stratify=y, random_state=42)
-    lr = LogisticRegression(max_iter=500); rf = RandomForestClassifier(n_estimators=n_trees, random_state=42)
-    lr.fit(X_train,y_train); rf.fit(X_train,y_train)
-    # Metrics
-    p_lr, pr_lr = lr.predict(X_test), lr.predict_proba(X_test)[:,1]
-    p_rf, pr_rf = rf.predict(X_test), rf.predict_proba(X_test)[:,1]
-    metrics = pd.DataFrame({'Model':['LR','RF'], 'Accuracy':[accuracy_score(y_test,p_lr),accuracy_score(y_test,p_rf)], 'AUC':[roc_auc_score(y_test,pr_lr),roc_auc_score(y_test,pr_rf)]}).set_index('Model')
-    st.subheader("Model Comparison")
-    st.dataframe(metrics.style.format('{:.3f}'))
-    # Confusion Matrix
-    st.subheader("Confusion Matrix (Random Forest)")
+    n_trees = st.slider("RF Trees", 10, 300, 100)
+    test_size = st.slider("Test Size", 0.1, 0.5, 0.2)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, stratify=y, random_state=42)
+    lr = LogisticRegression(max_iter=500)
+    rf = RandomForestClassifier(n_estimators=n_trees, random_state=42)
+    lr.fit(X_train, y_train)
+    rf.fit(X_train, y_train)
+    met = pd.DataFrame({
+        'Model': ['LR', 'RF'],
+        'Accuracy': [accuracy_score(y_test, lr.predict(X_test)), accuracy_score(y_test, rf.predict(X_test))],
+        'AUC': [roc_auc_score(y_test, lr.predict_proba(X_test)[:,1]), roc_auc_score(y_test, rf.predict_proba(X_test)[:,1])]
+    }).set_index('Model')
+    st.subheader("Metrics")
+    st.dataframe(met.style.format("{:.3f}"))
+    st.subheader("Confusion Matrix (RF)")
     cm = confusion_matrix(y_test, rf.predict(X_test))
     fig_cm, ax_cm = plt.subplots()
     ConfusionMatrixDisplay(cm).plot(ax=ax_cm)
     st.pyplot(fig_cm)
 
 # Tab 3: Prediction
-with tabs[2]:
+with t3:
     st.header("📝 Predict Risk on New Data")
-    new_file = st.file_uploader("Upload New Tenders CSV", type="csv", key="pred")
-    if new_file:
-        nd = load_data(new_file)
+    nf = st.file_uploader("Upload New CSV", type='csv', key='pred')
+    if nf:
+        nd = load_data(nf)
         nd.rename(columns={mapping[k]:k for k in mapping if mapping[k]}, inplace=True)
         X_new = pd.DataFrame(0, index=nd.index, columns=X.columns)
-        X_new['Value_log'] = np.log1p(pd.to_numeric(nd.get('Value',0),errors='coerce'))
-        X_new['BidCount_log'] = np.log1p(pd.to_numeric(nd.get('BidCount',0),errors='coerce'))
-        proc_new = pd.get_dummies(nd.get('ProcedureType',pd.Series()), prefix='ptype', dummy_na=True)
-        for col in proc_new.columns:
-            if col in X_new.columns: X_new[col] = proc_new[col]
-        for c in corr_cols: X_new[c] = nd.get(c,0)
-        nd['risk_prob']=rf.predict_proba(X_new)[:,1]; nd['risk_label']=(nd['risk_prob']>=0.5).astype(int)
+        X_new['Value_log'] = np.log1p(pd.to_numeric(nd['Value'],errors='coerce'))
+        X_new['BidCount_log'] = np.log1p(pd.to_numeric(nd['BidCount'],errors='coerce'))
+        proc = pd.get_dummies(nd['ProcedureType'].astype(str), prefix='ptype', dummy_na=True)
+        for c in proc.columns:
+            if c in X_new: X_new[c] = proc[c]
+        for c in corr_cols:
+            X_new[c] = nd.get(c, 0)
+        probs = rf.predict_proba(X_new)[:,1]
+        nd['risk_prob'] = probs
+        nd['risk_label'] = (probs>=0.5).astype(int)
         st.dataframe(nd[['TenderID','Vendor','risk_prob','risk_label']])
-        st.download_button("Download Predictions", nd.to_csv(index=False), file_name="predictions.csv")
+        st.download_button("Download Predictions", nd.to_csv(index=False), "preds.csv")
 
 # Tab 4: Suppliers
-with tabs[3]:
+with t4:
     st.header("🚩 High-Risk Suppliers")
     hr = df[df['high_risk']==1]
-    if hr.empty:
-        st.info("No high-risk suppliers found.")
-    else:
-        spend = hr.groupby('Vendor')['Value'].sum().nlargest(10)
-        fig, ax = plt.subplots()
-        spend.plot(kind='bar', color='red', ax=ax)
-        ax.set_title("Top 10 High-Risk Vendors by Spend")
-        ax.set_ylabel("Total Spend")
-        st.pyplot(fig)
+    top_sup = hr.groupby('Vendor')['Value'].sum().nlargest(10)
+    fig4 = px.pie(values=top_sup.values, names=top_sup.index, hole=0.4)
+    st.plotly_chart(fig4, use_container_width=True)
 
 # Tab 5: Summary
-with tabs[4]:
+with t5:
     st.header("📋 Executive Summary")
-    high_risk_pct = y.mean()*100
-    auc_full = roc_auc_score(y, rf.predict_proba(X)[:,1])
-    st.markdown(f"- **Records:** {len(df)}\n- **High-risk:** {y.sum()} ({high_risk_pct:.1f}%)\n- **RF AUC (full data):** {auc_full:.3f}")
-    st.markdown("_View modeling tab for train/test evaluation._")
+    st.markdown(f"- **Kept Records:** {len(df)}  ")
+    st.markdown(f"- **High-Risk Tenders:** {int(y.sum())} ({risk_pct:.1f}%)  ")
+    st.markdown(f"- **Full Model AUC:** {auc_full:.3f}  ")
+    st.balloons()
 
 # Tab 6: Predict CRI
-with tabs[5]:
-    st.header("🧮 Predict CRI Score from Features")
-    target_cols = [c for c in df.columns if c not in ['CRI','high_risk','TenderID','Vendor'] and df[c].dtype in [np.float64,np.int64]]
-    if len(target_cols)<2:
-        st.warning("Not enough numerical features for CRI regression.")
+with t6:
+    st.header("🧮 Predict CRI Score")
+    num_feats = [c for c in df.columns if df[c].dtype in [np.float64,int] and c not in ['CRI','high_risk']]
+    if len(num_feats)>1:
+        Xr = df[num_feats].dropna()
+        yr = df.loc[Xr.index,'CRI']
+        Xtr, Xte, ytr, yte = train_test_split(Xr,yr,test_size=0.2,random_state=42)
+        model = RidgeCV(alphas=np.logspace(-3,3,7))
+        model.fit(Xtr,ytr)
+        coefs = pd.DataFrame({'Feature':num_feats,'Coef':model.coef_})
+        st.subheader("Coefficients")
+        st.dataframe(coefs)
+        preds = model.predict(Xte)
+        st.write(f"R²: {r2_score(yte,preds):.3f}")
+        fig5 = px.scatter(x=yte, y=preds, labels={'x':'Actual CRI','y':'Predicted CRI'})
+        st.plotly_chart(fig5, use_container_width=True)
     else:
-        X_reg = df[target_cols].dropna()
-        y_reg = df.loc[X_reg.index,'CRI']
-        X_tr, X_te, y_tr, y_te = train_test_split(X_reg,y_reg,test_size=0.2, random_state=42)
-        model = RidgeCV(alphas=np.logspace(-3,3,7)); model.fit(X_tr,y_tr)
-        coef_df = pd.DataFrame({'Feature':target_cols,'Coefficient':model.coef_})
-        st.subheader("Regression Coefficients")
-        st.dataframe(coef_df)
-        from sklearn.metrics import r2_score, mean_squared_error
-        y_pred = model.predict(X_te)
-        st.write(f"R²: {r2_score(y_te,y_pred):.3f}, MSE: {mean_squared_error(y_te,y_pred):.3f}")
-        fig, ax = plt.subplots()
-        sns.scatterplot(x=y_te, y=y_pred, ax=ax)
-        ax.set_xlabel("Actual CRI"); ax.set_ylabel("Predicted CRI")
-        st.pyplot(fig)
-    
-    st.balloons()
+        st.info("Not enough features to predict CRI.")
