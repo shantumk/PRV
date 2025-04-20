@@ -10,7 +10,7 @@ from sklearn.metrics import roc_auc_score, accuracy_score
 
 # Optional LLM import
 try:
-    from huggingface_hub import InferenceApi
+    from huggingface_hub import InferenceClient
     hf_hub_installed = True
 except ImportError:
     hf_hub_installed = False
@@ -32,7 +32,7 @@ if hf_hub_installed:
     try:
         hf_token = st.secrets.get("HUGGINGFACEHUB_API_TOKEN")
         if hf_token:
-            hf_infer = InferenceApi(repo_id="google/flan-t5-small", token=hf_token)
+            hf_infer = InferenceClient(model="google/flan-t5-small", token=hf_token)
             hf_ready = True
         else:
             st.warning("⚠️ LLM token missing; descriptive summaries disabled.")
@@ -68,20 +68,16 @@ def clean_and_engineer(df, mapping):
     y = df['high_risk']
     return df, X, y, before, after, corr_cols
 
+# Describe LLM helper
 def describe_field(text):
     if not hf_ready:
         return 'LLM unavailable'
     try:
-        resp = hf_infer(inputs=text)  # FIXED: removed 'parameters'
-        if isinstance(resp, list) and 'generated_text' in resp[0]:
-            return resp[0]['generated_text'].strip()
-        if isinstance(resp, str):
-            return resp.strip()
-        return str(resp)
+        return hf_infer.text_generation(prompt=text, max_new_tokens=100).strip()
     except Exception as e:
         return f'LLM error: {e}'
 
-# --- Upload ---
+# --- Sidebar: Upload & Map ---
 st.sidebar.header("📂 Upload Your Procurement CSV")
 file = st.sidebar.file_uploader("Upload CSV", type="csv")
 if not file:
@@ -205,9 +201,6 @@ with tabs[3]:
     st.pyplot(fig)
 
 # --- Tab 5: Executive Summary ---
-with tabs[4]:
-    st.header("📋 Project Summary")
-    # --- Tab 5: Executive Summary ---
 with tabs[4]:
     st.header("📋 Project Summary")
     st.markdown(f"""
