@@ -6,3 +6,4 @@ seaborn
 scikit-learn
 shap
 huggingface_hub
+plotly
