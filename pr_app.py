@@ -107,12 +107,13 @@ if uploaded_file:
         ax_box.set_xticklabels(['Low Risk','High Risk'])
         st.pyplot(fig_box)
 
-        # Correlation heatmap
-        st.subheader("Correlation Heatmap of Key Features")
-        num_cols = ["Value_log", "BidCount_log", "CRI"] + corr_cols
-        corr_mat = pd.concat([X_base[num_cols], y_base], axis=1).corr()
+                # Correlation heatmap of features and target
+        st.subheader("Correlation Heatmap of Key Features and Risk")
+        # Assemble dataframe with feature logs and target CRI
+        corr_features = list(X_base.columns) + ['CRI']
+        corr_df = pd.concat([X_base, df[['CRI']]], axis=1)[corr_features]
         fig_corr, ax_corr = plt.subplots(figsize=(12, 10))
-        sns.heatmap(corr_mat, cmap="vlag", center=0, annot=False, ax=ax_corr)
+        sns.heatmap(corr_df.corr(), cmap="vlag", center=0, annot=False, ax=ax_corr)
         st.pyplot(fig_corr)
 
     # --- Modeling Tab ---
