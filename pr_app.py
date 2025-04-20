@@ -9,6 +9,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression, RidgeCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import r2_score, mean_squared_error
 
 # Optional LLM import
 try:
