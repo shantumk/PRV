@@ -7,6 +7,52 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, roc_curve
+import requests
+
+# --- Hugging Face LLM Setup (Field Descriptions) ---
+HF_MODEL = "google/flan-t5-small"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+HF_TOKEN = st.secrets.get("hf_token", "")  # store your HF token under secrets.toml as hf_token
+HF_HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}  
+
+def describe_field_with_llm(field_name, context="procurement risk analysis"):
+    prompt = f"Describe the meaning and relevance of the '{field_name}' field in the context of {context}. Provide why it's important for corruption-risk prediction."
+    payload = {"inputs": prompt}
+    try:
+        r = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload, timeout=30)
+        if r.status_code == 200:
+            # assume model returns a list of dicts with 'generated_text'
+            resp = r.json()
+            if isinstance(resp, list) and 'generated_text' in resp[0]:
+                return resp[0]['generated_text'].strip()
+            return resp
+        else:
+            return f"LLM Error {r.status_code}: {r.text}"  
+    except Exception as e:
+        return f"Request failed: {e}"
+import requests
+
+# --- Hugging Face LLM Setup (Field Descriptions) ---
+HF_MODEL = "google/flan-t5-small"
+HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+HF_TOKEN = st.secrets.get("hf_token", "")  # store your HF token under secrets.toml as hf_token
+HF_HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}  
+
+def describe_field_with_llm(field_name, context="procurement risk analysis"):
+    prompt = f"Describe the meaning and relevance of the '{field_name}' field in the context of {context}. Provide why it's important for corruption-risk prediction."
+    payload = {"inputs": prompt}
+    try:
+        r = requests.post(HF_API_URL, headers=HF_HEADERS, json=payload, timeout=30)
+        if r.status_code == 200:
+            # assume model returns a list of dicts with 'generated_text'
+            resp = r.json()
+            if isinstance(resp, list) and 'generated_text' in resp[0]:
+                return resp[0]['generated_text'].strip()
+            return resp
+        else:
+            return f"LLM Error {r.status_code}: {r.text}"  
+    except Exception as e:
+        return f"Request failed: {e}"
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Procurement Corruption-Risk Prediction", layout="wide")
@@ -82,14 +128,31 @@ if uploaded_file:
     # --- EDA Tab ---
     with tab_eda:
         st.header("📊 Exploratory Data Analysis")
-                # Data availability with toggle options
+
+        # ___ Field Descriptions via LLM ___
+        if st.checkbox("📝 Show Field Descriptions"):
+            fields = st.multiselect(
+                "Select fields to explain", 
+                options=list(X_base.columns) + ['CRI'],
+                default=['Value_log','BidCount_log','CRI']
+            )
+            if st.button("Describe selected fields"):
+                with st.spinner("Fetching descriptions..."):
+                    for f in fields:
+                        st.subheader(f"**{f}**")
+                        st.write(describe_field_with_llm(f))
+        st.markdown("---")
+
+        # Data availability with toggle options
         st.subheader("Data Availability")
         avail = df.notnull().mean() * 100
-        # Toggle between Top/Bottom view and Full table view
-        view_mode = st.radio("Choose availability display:", ["Top/Bottom 10", "Full Data Table"])  
+        view_mode = st.radio(
+            "Choose availability display:",
+            ["Top/Bottom 10", "Full Data Table"], key='avail_view'
+        )  
         if view_mode == "Top/Bottom 10":
             top_bottom = st.selectbox(
-                "Show:", ["Most Complete", "Most Missing"], index=0
+                "Show (by availability):", ["Most Complete", "Most Missing"], index=0, key='tb'
             )
             if top_bottom == "Most Complete":
                 subset = avail.sort_values(ascending=False).head(10)
@@ -100,15 +163,16 @@ if uploaded_file:
             ax_sub.set_xlabel("% Non-Null")
             st.pyplot(fig_sub)
         else:
-            # Full data availability table
             avail_df = avail.sort_values(ascending=False).to_frame("Availability (%)")
             st.dataframe(avail_df)
-
 
         # Scatter Value vs BidCount colored by risk
         st.subheader("Value vs. BidCount (colored by risk)")
         fig_scatter, ax_scatter = plt.subplots()
-        sns.scatterplot(data=df, x="BidCount", y="Value", hue="high_risk", palette=['green','red'], alpha=0.6, ax=ax_scatter)
+        sns.scatterplot(
+            data=df, x="BidCount", y="Value", hue="high_risk", 
+            palette=['green','red'], alpha=0.6, ax=ax_scatter
+        )
         ax_scatter.set_yscale('log')
         ax_scatter.set_xscale('log')
         ax_scatter.set_xlabel("Bid Count (log scale)")
@@ -122,16 +186,15 @@ if uploaded_file:
         ax_box.set_xticklabels(['Low Risk','High Risk'])
         st.pyplot(fig_box)
 
-                # Correlation heatmap of features and target
+        # Correlation Heatmap
         st.subheader("Correlation Heatmap of Key Features and Risk")
-        # Assemble dataframe with feature logs and target CRI
         corr_features = list(X_base.columns) + ['CRI']
         corr_df = pd.concat([X_base, df[['CRI']]], axis=1)[corr_features]
         fig_corr, ax_corr = plt.subplots(figsize=(12, 10))
         sns.heatmap(corr_df.corr(), cmap="vlag", center=0, annot=False, ax=ax_corr)
         st.pyplot(fig_corr)
 
-    # --- Modeling Tab ---
+# --- Modeling Tab ---
     with tab_model:
         st.header("🤖 Model Training & Evaluation")
         test_size = st.slider("Test set fraction", 0.1, 0.5, 0.2, step=0.05)
