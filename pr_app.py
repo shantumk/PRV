@@ -207,24 +207,34 @@ with t2:
     st.subheader("🔍 SHAP Feature Importance (sampled)")
     try:
         import shap
+
         # sample up to 100 rows for speed
         sample_n  = min(100, X_train.shape[0])
         X_sample  = X_train.sample(n=sample_n, random_state=42)
+
         explainer = shap.TreeExplainer(rf)
-        shap_vals = explainer.shap_values(X_sample)[1]  # class‑1
+        shap_vals = explainer.shap_values(X_sample)[1]  # shap for class‑1
 
         # compute mean(|shap|)
         mean_abs = np.abs(shap_vals).mean(axis=0)
+        features = list(X_sample.columns)
+
+        # guard: ensure lengths match
+        min_len = min(len(mean_abs), len(features))
         shap_imp = pd.DataFrame({
-            'feature': X_sample.columns,
-            'importance': mean_abs
+            'feature':    features[:min_len],
+            'importance': mean_abs[:min_len]
         }).sort_values('importance', ascending=True)
 
         fig_shap, ax_shap = plt.subplots(figsize=(6,8))
-        ax_shap.barh(shap_imp['feature'], shap_imp['importance'])
+        ax_shap.barh(shap_imp['feature'], shap_imp['importance'], color='teal')
         ax_shap.set_xlabel("Mean |SHAP value|")
-        ax_shap.set_title("Feature importance (positive class)")
+        ax_shap.set_title("Key drivers of high‑risk prediction")
         st.pyplot(fig_shap)
+
+        st.markdown(
+            "🔎 **Conclusion:** These features have the greatest impact on the model’s decision to flag a tender as high‑risk."
+        )
 
     except ImportError:
         st.warning("⚠️ SHAP not installed; skipping explainability.")
