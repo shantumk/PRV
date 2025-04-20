@@ -24,6 +24,9 @@ st.markdown("""
 This app helps procurement officers, auditors, and analysts **detect high-risk tenders** in public or private procurement data using explainable machine learning.
 
 **Upload your data → Automatically map → Clean and visualize → Predict risk → Prioritize supplier audits.**
+
+### 📌 Objective:
+To identify corruption-prone tenders using a data-driven approach, highlight high-risk vendors, and assist in prioritizing audit efforts using ML-based risk scores and domain context.
 """)
 
 # --- LLM Setup ---
@@ -207,5 +210,16 @@ with tabs[4]:
     **Records after cleaning:** {len(df)}  
     **High-risk tenders:** {y.sum()} ({y.mean()*100:.1f}%)  
     **Random Forest AUC:** {roc_auc_score(y_test, rf.predict_proba(X_test)[:,1]):.3f}  
+    """)
+    st.markdown("---")
+    st.markdown("### 📌 Submission Note for Professors")
+    st.markdown("""
+    This project leverages real-world procurement data to:
+    - Demonstrate data cleaning, preprocessing, and anomaly identification.
+    - Build interpretable machine learning models to flag corruption risks.
+    - Summarize supplier-wise insights to assist audit prioritization.
+    - Use a language model to generate explanations and insights for end-users.
+
+    It is designed for ease of use in a browser and modular for further academic or enterprise extension.
     """)
     st.balloons()
