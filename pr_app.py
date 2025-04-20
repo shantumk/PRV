@@ -6,11 +6,10 @@ import seaborn as sns
 from sklearn.ensemble import IsolationForest
 from scipy.stats import zscore
 
-# --- Page Config ---
 st.set_page_config(page_title="Procurement Compliance & Sustainability Analyzer", layout="wide")
 st.title("🛠 Procurement Compliance & Sustainability Analyzer")
 
-# --- Sidebar: Data Upload ---
+# Sidebar: Data Upload
 st.sidebar.header("📂 Upload Your Data")
 uploaded_file = st.sidebar.file_uploader("Upload Procurement Data CSV", type=["csv"])
 uploaded_emission_file = st.sidebar.file_uploader(
@@ -18,15 +17,12 @@ uploaded_emission_file = st.sidebar.file_uploader(
     help="CSV with columns: CPVS, emission_factor"
 )
 
-# --- Main App Logic ---
-if not uploaded_file:
-    st.info("Please expand the sidebar and upload a procurement CSV file to begin analysis.")
-else:
-    # Load the procurement data
+if uploaded_file:
+    # Load data
     df = pd.read_csv(uploaded_file)
     cols = df.columns.tolist()
 
-    # --- Auto-mapping helper ---
+    # Auto-mapping helper
     def auto_map(options):
         for col in cols:
             for opt in options:
@@ -34,7 +30,7 @@ else:
                     return col
         return None
 
-    # --- Default mappings ---
+    # Default mappings
     mapping = {
         "TenderID": auto_map(["tender_id", "pr_id", "id"]),
         "Value": auto_map(["value", "contract_value", "amount", "price"]),
@@ -44,32 +40,33 @@ else:
         "Vendor": auto_map(["vendor", "supplier", "buyer"]),
     }
 
-    # --- User-confirmable mapping ---
+    # User-confirmable mapping
     st.sidebar.subheader("🔧 Column Mapping")
     for std, default in mapping.items():
         mapping[std] = st.sidebar.selectbox(
-            f"Select {std} column", options=[""] + cols,
-            index=(cols.index(default) + 1 if default in cols else 0)
+            f"Select {std} column", options=[""] + cols, index=(cols.index(default)+1 if default in cols else 0)
         )
 
-    # --- Rename and clean dataframe ---
+    # Rename dataframe columns
     rename_dict = {mapping[k]: k for k in mapping if mapping[k]}
     df = df.rename(columns=rename_dict)
+
+    # Convert to numeric
     df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
     if mapping["BidCount"]:
         df["BidCount"] = pd.to_numeric(df["BidCount"], errors="coerce")
+
+    # Drop rows missing required fields
     df = df.dropna(subset=["TenderID", "Value"])
     st.success("✅ Data loaded and columns mapped successfully!")
 
     # --- Analytics 2: Anomaly Detection ---
     st.header("🚨 Anomaly Detection")
-    # Z-score outliers
     df["z_score"] = zscore(df["Value"].fillna(0))
     outliers = df[df["z_score"] > 3]
     st.subheader("High Value Outliers (Z-score > 3)")
     st.dataframe(outliers[["TenderID", "Vendor", "Value", "z_score"]])
 
-    # Isolation Forest
     iso = IsolationForest(contamination=0.05, random_state=42)
     df["anomaly"] = iso.fit_predict(df[["Value"]].fillna(0))
     anomalies = df[df["anomaly"] == -1]
@@ -97,6 +94,7 @@ else:
     st.header("🌱 Carbon Footprint Estimation")
     if uploaded_emission_file:
         ef = pd.read_csv(uploaded_emission_file)
+        # Expect columns: CPVS, emission_factor
         df = df.merge(ef, on="CPVS", how="left")
         df["CO2e"] = df["Value"] * df["emission_factor"]
         st.subheader("Top Carbon Impact Tenders")
@@ -124,3 +122,6 @@ else:
         "Download Anomalies CSV", anomalies.to_csv(index=False),
         file_name="anomalies.csv", mime="text/csv"
     )
+
+else:
+    st.info("Please upload a procurement CSV file to begin analysis.")
