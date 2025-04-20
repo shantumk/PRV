@@ -164,14 +164,38 @@ with tabs[1]:
         explainer = shap.TreeExplainer(rf)
         shap_vals = explainer.shap_values(X_tr)
         st.subheader("SHAP Summary")
-        fig = shap.summary_plot(shap_vals[1], X_tr, show=False)
-        st.pyplot(fig)
+        shap.summary_plot(shap_vals[1], X_tr, show=False)
+        fig_shap = plt.gcf()
+        st.pyplot(fig_shap)
     else:
         st.warning("⚠️ SHAP library not installed; skipping SHAP explanation.")
     p_lr, pr_lr = lr.predict(X_te), lr.predict_proba(X_te)[:,1]
     p_rf, pr_rf = rf.predict(X_te), rf.predict_proba(X_te)[:,1]
     met = pd.DataFrame({"Model":["LR","RF"],"AUC":[roc_auc_score(y_te,pr_lr),roc_auc_score(y_te,pr_rf)],"Acc":[accuracy_score(y_te,p_lr),accuracy_score(y_te,p_rf)]}).set_index("Model")
     st.dataframe(met)
+
+# Prediction
+with tabs[2]:
+    st.header("Model Prediction")
+    st.info("Upload a new CSV under the '📝 Prediction' tab to get risk predictions for unseen tenders.")
+    new_file = st.file_uploader("Upload new tenders CSV", type="csv", key="pred")
+    if new_file:
+        nd = load_data(new_file)
+        try:
+            nd.rename(columns={mapping[k]:k for k in mapping if mapping[k]}, inplace=True)
+            # Feature engineering for new data
+            X_new = pd.DataFrame({"Value_log": np.log1p(pd.to_numeric(nd.get('Value',0),errors='coerce')),
+                                   "BidCount_log": np.log1p(pd.to_numeric(nd.get('BidCount',0),errors='coerce'))})
+            proc_new = pd.get_dummies(nd.get('ProcedureType', pd.Series()), prefix="ptype", dummy_na=True)
+            X_new = pd.concat([X_new, proc.reindex(proc_new.index, fill_value=0)], axis=1)
+            for c in corr_cols:
+                X_new[c] = nd.get(c,0)
+            probs = rf.predict_proba(X_new)[:,1]
+            nd['risk_prob'] = probs; nd['risk_label'] = (probs>=0.5).astype(int)
+            st.dataframe(nd[["TenderID","Vendor","risk_prob","risk_label"]])
+            st.download_button("Download Predictions", nd.to_csv(index=False), file_name="predictions.csv")
+        except Exception as e:
+            st.error(f"Prediction error: {e}")
 
 # Suppliers
 with tabs[3]:
