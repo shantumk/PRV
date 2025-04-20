@@ -6,7 +6,8 @@ import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score, accuracy_score
+from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.linear_model import RidgeCV
 
 # Optional LLM import
 try:
@@ -135,29 +136,36 @@ if df.empty or X.empty or y.empty:
     st.stop()
 
 # --- Tabs ---
-tabs = st.tabs(["📊 EDA", "🤖 Modeling", "📝 Prediction", "🚩 Suppliers", "📋 Summary"])
+tabs = st.tabs(["📊 EDA", "🤖 Modeling", "📝 Prediction", "🚩 Suppliers", "📋 Summary", "🧮 Predict CRI"])
 
 # --- Tab 1: EDA ---
 with tabs[0]:
     st.header("📊 Exploratory Data Analysis")
+    st.markdown("""
+    **Purpose:** To understand data quality, distribution, and spot potential risk signals.
+    """)
     if hf_ready and st.button("💡 Generate Dataset Summary"):
         insight = describe_field(f"Summarize a procurement dataset with {len(df)} rows and {df.shape[1]} fields.")
         st.info(insight)
 
-    st.subheader("Field Availability")
+    st.subheader("1. Field Availability (% non-null values)")
     avail = df.notnull().mean() * 100
     st.bar_chart(avail)
 
-    st.subheader("Spend vs Bid Count")
+    st.markdown("This helps check for missing data and evaluate field reliability.")
+
+    st.subheader("2. Spend vs Bid Count with Risk Coloring")
     fig, ax = plt.subplots()
     sns.scatterplot(data=df, x="BidCount", y="Value", hue="high_risk", ax=ax)
     ax.set_xscale("log"); ax.set_yscale("log")
     st.pyplot(fig)
+    st.markdown("This identifies low-competition, high-value tenders—often at higher risk.")
 
-    st.subheader("CRI Distribution by Risk")
+    st.subheader("3. CRI Distribution by Risk Label")
     fig, ax = plt.subplots()
     sns.boxplot(data=df, x="high_risk", y="CRI", ax=ax)
     st.pyplot(fig)
+    st.markdown("This shows that high-risk tenders typically have higher CRI scores.")
 
 # --- Tab 2: Modeling ---
 with tabs[1]:
@@ -179,62 +187,45 @@ with tabs[1]:
         "AUC": [roc_auc_score(y_test, lr.predict_proba(X_test)[:,1]), roc_auc_score(y_test, rf.predict_proba(X_test)[:,1])]
     }).set_index("Model")
 
-    st.subheader("Model Comparison")
+    st.subheader("Model Comparison (Accuracy & AUC)")
     st.dataframe(metrics.style.format("{:.3f}"))
 
-# --- Tab 3: Prediction ---
-with tabs[2]:
-    st.header("📝 Predict Risk on New Data")
-    new_file = st.file_uploader("Upload New Tender File", type="csv", key="predict")
-    if new_file:
-        new_df = load_data(new_file)
-        new_df.rename(columns={mapping[k]: k for k in mapping if mapping[k]}, inplace=True)
-        X_new = pd.DataFrame(0, index=new_df.index, columns=X.columns)
-        X_new['Value_log'] = np.log1p(pd.to_numeric(new_df['Value'], errors='coerce'))
-        X_new['BidCount_log'] = np.log1p(pd.to_numeric(new_df['BidCount'], errors='coerce'))
+    st.subheader("Confusion Matrix (Random Forest)")
+    cm = confusion_matrix(y_test, rf.predict(X_test))
+    fig_cm, ax_cm = plt.subplots()
+    ConfusionMatrixDisplay(cm).plot(ax=ax_cm)
+    st.pyplot(fig_cm)
 
-        proc_new = pd.get_dummies(new_df['ProcedureType'].astype(str), prefix="ptype", dummy_na=True)
-        for col in proc_new.columns:
-            if col in X_new.columns:
-                X_new[col] = proc_new[col]
+    st.markdown("Use confusion matrix to understand False Positives (unnecessary audits) and False Negatives (missed risks).")
 
-        for c in corr_cols:
-            X_new[c] = new_df.get(c, 0)
+# --- Tab 6: Predict CRI using Regression ---
+with tabs[5]:
+    st.header("🧮 Predict CRI Score Based on Other Features")
+    target_cols = [c for c in df.columns if c not in ['CRI', 'high_risk', 'Vendor', 'TenderID'] and df[c].dtype in [np.float64, np.int64]]
+    if len(target_cols) < 2:
+        st.warning("Not enough numerical features to build CRI regression model.")
+    else:
+        st.write("Training on features:", target_cols)
+        X_reg = df[target_cols].dropna()
+        y_reg = df.loc[X_reg.index, 'CRI']
 
-        preds = rf.predict_proba(X_new)[:,1]
-        new_df["risk_prob"] = preds
-        new_df["risk_label"] = (preds >= 0.5).astype(int)
+        X_train, X_test, y_train, y_test = train_test_split(X_reg, y_reg, test_size=0.2, random_state=42)
+        model = RidgeCV(alphas=np.logspace(-3, 3, 7))
+        model.fit(X_train, y_train)
 
-        st.dataframe(new_df[["TenderID", "Vendor", "risk_prob", "risk_label"]])
-        st.download_button("📥 Download Predictions", new_df.to_csv(index=False), "predictions.csv")
+        st.subheader("Model Coefficients")
+        coef_df = pd.DataFrame({"Feature": target_cols, "Coefficient": model.coef_})
+        st.dataframe(coef_df)
 
-# --- Tab 4: Supplier Summary ---
-with tabs[3]:
-    st.header("🚩 High-Risk Supplier Overview")
-    high_risk = df[df["high_risk"] == 1]
-    supplier_spend = high_risk.groupby("Vendor")["Value"].sum().sort_values(ascending=False).head(10)
-    fig, ax = plt.subplots()
-    supplier_spend.plot.pie(autopct='%1.1f%%', ax=ax)
-    ax.set_ylabel("")
-    st.pyplot(fig)
+        y_pred = model.predict(X_test)
+        from sklearn.metrics import mean_squared_error, r2_score
+        st.write(f"R² Score: {r2_score(y_test, y_pred):.3f}")
+        st.write(f"MSE: {mean_squared_error(y_test, y_pred):.3f}")
 
-# --- Tab 5: Executive Summary ---
-with tabs[4]:
-    st.header("📋 Project Summary")
-    st.markdown(f"""
-    **Records after cleaning:** {len(df)}  
-    **High-risk tenders:** {y.sum()} ({y.mean()*100:.1f}%)  
-    **Random Forest AUC:** {roc_auc_score(y_test, rf.predict_proba(X_test)[:,1]):.3f}  
-    """)
-    st.markdown("---")
-    st.markdown("### 📌 Submission Note for Professors")
-    st.markdown("""
-    This project leverages real-world procurement data to:
-    - Demonstrate data cleaning, preprocessing, and anomaly identification.
-    - Build interpretable machine learning models to flag corruption risks.
-    - Summarize supplier-wise insights to assist audit prioritization.
-    - Use a language model to generate explanations and insights for end-users.
+        fig, ax = plt.subplots()
+        sns.scatterplot(x=y_test, y=y_pred, ax=ax)
+        ax.set_xlabel("Actual CRI"); ax.set_ylabel("Predicted CRI")
+        ax.set_title("CRI Prediction vs Actual")
+        st.pyplot(fig)
 
-    It is designed for ease of use in a browser and modular for further academic or enterprise extension.
-    """)
-    st.balloons()
+        st.markdown("This helps explore whether CRI can be reliably estimated from the features. Strong R² would indicate internal consistency.")
