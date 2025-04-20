@@ -10,6 +10,12 @@ from sklearn.linear_model import LogisticRegression, RidgeCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score, accuracy_score, confusion_matrix, ConfusionMatrixDisplay
 from sklearn.metrics import r2_score, mean_squared_error
+try:
+    import shap
+    shap_installed = True
+except ImportError:
+    shap_installed = False
+
 
 # Optional LLM import
 try:
@@ -162,18 +168,43 @@ with t2:
     st.header("🤖 Model Training & Evaluation")
     n_trees = st.slider("RF Trees", 10, 300, 100)
     test_size = st.slider("Test Size", 0.1, 0.5, 0.2)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, stratify=y, random_state=42)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, stratify=y, random_state=42
+    )
     lr = LogisticRegression(max_iter=500)
     rf = RandomForestClassifier(n_estimators=n_trees, random_state=42)
+
     lr.fit(X_train, y_train)
     rf.fit(X_train, y_train)
+
+    # ──────── SHAP Explainer ────────
+    if shap_installed:
+        st.subheader("🔍 SHAP Feature Importance")
+        explainer = shap.TreeExplainer(rf)
+        shap_values = explainer.shap_values(X_train)
+        # summary_plot returns a matplotlib figure when show=False
+        fig_shap = shap.summary_plot(shap_values[1], X_train, show=False)
+        st.pyplot(fig_shap)
+    else:
+        st.info("Install `shap` to see feature‑level explanations.")
+    # ─────────────────────────────────
+
     met = pd.DataFrame({
         'Model': ['LR', 'RF'],
-        'Accuracy': [accuracy_score(y_test, lr.predict(X_test)), accuracy_score(y_test, rf.predict(X_test))],
-        'AUC': [roc_auc_score(y_test, lr.predict_proba(X_test)[:,1]), roc_auc_score(y_test, rf.predict_proba(X_test)[:,1])]
+        'Accuracy': [
+            accuracy_score(y_test, lr.predict(X_test)),
+            accuracy_score(y_test, rf.predict(X_test))
+        ],
+        'AUC': [
+            roc_auc_score(y_test, lr.predict_proba(X_test)[:,1]),
+            roc_auc_score(y_test, rf.predict_proba(X_test)[:,1])
+        ]
     }).set_index('Model')
+
     st.subheader("Metrics")
     st.dataframe(met.style.format("{:.3f}"))
+
     st.subheader("Confusion Matrix (RF)")
     cm = confusion_matrix(y_test, rf.predict(X_test))
     fig_cm, ax_cm = plt.subplots()
