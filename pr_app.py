@@ -13,7 +13,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score, accuracy_score, roc_curve
-import shap
+# Optional SHAP import for explainability
+try:
+    import shap
+    shap_installed = True
+except ImportError:
+    shap_installed = False
 
 # --- Page Config ---
 st.set_page_config(page_title="Procurement Corruption-Risk Prediction", layout="wide")
@@ -155,8 +160,14 @@ with tabs[1]:
     X_tr, X_te, y_tr, y_te = train_test_split(X,y,test_size=test_frac, stratify=y, random_state=42)
     lr = LogisticRegression(max_iter=500); rf = RandomForestClassifier(n_estimators=n_trees, random_state=42)
     lr.fit(X_tr, y_tr); rf.fit(X_tr, y_tr)
-    explainer = shap.TreeExplainer(rf); shap_vals = explainer.shap_values(X_tr)
-    st.subheader("SHAP Summary"); fig = shap.summary_plot(shap_vals[1], X_tr, show=False); st.pyplot(fig)
+    if shap_installed:
+        explainer = shap.TreeExplainer(rf)
+        shap_vals = explainer.shap_values(X_tr)
+        st.subheader("SHAP Summary")
+        fig = shap.summary_plot(shap_vals[1], X_tr, show=False)
+        st.pyplot(fig)
+    else:
+        st.warning("⚠️ SHAP library not installed; skipping SHAP explanation.")
     p_lr, pr_lr = lr.predict(X_te), lr.predict_proba(X_te)[:,1]
     p_rf, pr_rf = rf.predict(X_te), rf.predict_proba(X_te)[:,1]
     met = pd.DataFrame({"Model":["LR","RF"],"AUC":[roc_auc_score(y_te,pr_lr),roc_auc_score(y_te,pr_rf)],"Acc":[accuracy_score(y_te,p_lr),accuracy_score(y_te,p_rf)]}).set_index("Model")
