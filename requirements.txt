@@ -3,6 +3,6 @@ pandas
 numpy
 matplotlib
 seaborn
-scikit‑learn
+scikit-learn
 shap
 huggingface_hub
