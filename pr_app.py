@@ -203,11 +203,28 @@ with t3:
 
 # Tab 4: Suppliers
 with t4:
-    st.header("🚩 High-Risk Suppliers")
+    st.header("🚩 High‑Risk Suppliers")
     hr = df[df['high_risk']==1]
-    top_sup = hr.groupby('Vendor')['Value'].sum().nlargest(10)
-    fig4 = px.pie(values=top_sup.values, names=top_sup.index, hole=0.4)
-    st.plotly_chart(fig4, use_container_width=True)
+    if hr.empty:
+        st.info("No high‑risk suppliers found in the data.")
+    else:
+        # spend pie
+        top_sup = hr.groupby('Vendor')['Value'].sum().nlargest(10)
+        fig4 = px.pie(
+            values=top_sup.values,
+            names=top_sup.index,
+            hole=0.4,
+            title="Top 10 High‑Risk Vendors by Spend"
+        )
+        st.plotly_chart(fig4, use_container_width=True)
+
+        # audit recommendation
+        st.markdown("""
+        **🔍 Audit Recommendation:**  
+        The vendors above account for the largest share of your high‑risk spend.  
+        **Prioritize audit and due‑diligence** on these suppliers to mitigate corruption exposure.
+        """)
+
 
 # Tab 5: Summary
 with t5:
@@ -218,21 +235,48 @@ with t5:
     st.balloons()
 
 # Tab 6: Predict CRI
-with t6:
+ith t6:
     st.header("🧮 Predict CRI Score")
-    num_feats = [c for c in df.columns if df[c].dtype in [np.float64,int] and c not in ['CRI','high_risk']]
-    if len(num_feats)>1:
+    num_feats = [
+        c for c in df.columns
+        if df[c].dtype in [np.float64, np.int64] and c not in ['CRI','high_risk']
+    ]
+    if len(num_feats) > 1:
+        # prepare & train
         Xr = df[num_feats].dropna()
-        yr = df.loc[Xr.index,'CRI']
-        Xtr, Xte, ytr, yte = train_test_split(Xr,yr,test_size=0.2,random_state=42)
+        yr = df.loc[Xr.index, 'CRI']
+        Xtr, Xte, ytr, yte = train_test_split(Xr, yr,
+                                              test_size=0.2,
+                                              random_state=42)
         model = RidgeCV(alphas=np.logspace(-3,3,7))
-        model.fit(Xtr,ytr)
-        coefs = pd.DataFrame({'Feature':num_feats,'Coef':model.coef_})
-        st.subheader("Coefficients")
+        model.fit(Xtr, ytr)
+
+        # coefficients
+        coefs = pd.DataFrame({'Feature': num_feats, 'Coef': model.coef_})
+        st.subheader("Model Coefficients")
         st.dataframe(coefs)
+
+        # performance
         preds = model.predict(Xte)
-        st.write(f"R²: {r2_score(yte,preds):.3f}")
-        fig5 = px.scatter(x=yte, y=preds, labels={'x':'Actual CRI','y':'Predicted CRI'})
+        r2  = r2_score(yte, preds)
+        mse = mean_squared_error(yte, preds)
+        st.write(f"**R² Score:** {r2:.3f} | **MSE:** {mse:.3f}")
+
+        # scatter
+        fig5 = px.scatter(
+            x=yte, y=preds,
+            labels={'x':'Actual CRI','y':'Predicted CRI'},
+            title="Actual vs. Predicted CRI"
+        )
         st.plotly_chart(fig5, use_container_width=True)
+
+        # closing insight
+        st.markdown(f"""
+        **🔑 Take‑Away:**  
+        An R² of **{r2:.2f}** means this regression model explains about **{r2*100:.1f}%**  
+        of the variance in CRI.  
+        {'This is strong evidence that CRI can be reliably estimated from these features.' if r2>=0.5 else 'This suggests additional or more‑informative features may be needed to predict CRI more accurately.'}
+        """)
+
     else:
-        st.info("Not enough features to predict CRI.")
+        st.info("Not enough numeric features to build a CRI regression model.")
