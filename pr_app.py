@@ -55,8 +55,12 @@ def load_data(file):
         return pd.DataFrame()
 
 @st.cache_data
-def clean_and_engineer(df, mapping):
+def clean_and_engineer(df, mapping, threshold=0.45):
     df = df.rename(columns={mapping[k]: k for k in mapping if mapping[k]})
+
+    # Drop columns below threshold
+    availability = df.notnull().mean()
+    df = df[availability[availability >= threshold].index.tolist()]
 
     required_fields = ['TenderID', 'Value', 'BidCount', 'ProcedureType', 'CRI', 'Vendor']
     missing_cols = [col for col in required_fields if col not in df.columns]
@@ -109,6 +113,9 @@ raw = load_data(file)
 cols = raw.columns.tolist()
 st.sidebar.success(f"Loaded {len(raw):,} rows")
 
+# Threshold Slider
+threshold = st.sidebar.slider("Minimum Column Availability (%)", 10, 100, 45) / 100
+
 # --- Auto-mapping ---
 def am(opts):
     for c in cols:
@@ -131,7 +138,7 @@ st.sidebar.subheader("🔧 Confirm Column Mapping")
 for key, default in default_map.items():
     mapping[key] = st.sidebar.selectbox(key, [''] + cols, index=(cols.index(default)+1 if default in cols else 0))
 
-df, X, y, before, after, corr_cols = clean_and_engineer(raw, mapping)
+df, X, y, before, after, corr_cols = clean_and_engineer(raw, mapping, threshold)
 if df.empty or X.empty or y.empty:
     st.stop()
 
